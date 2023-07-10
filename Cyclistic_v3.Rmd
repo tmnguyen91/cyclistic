@@ -1,0 +1,359 @@
+---
+title: "Cysclistic 2022 Overview"
+output:
+  html_document:
+    df_print: paged
+---
+## Google Data Analyst Capstone
+## Introduction
+Cyclistic is a bike-sharing program that features more than 5,800 bicycles and 600 docking station all across Chicago. The program was launched in 2016 and has been steady raising since then. Cyclistic sets itself apart by also offering reclining bikes, hand tricycles, and cargo bikes, making bike-share more inclusive to people with disabilities and riders who can’t use a standard two-wheeled bike. The majority of riders opt for traditional bikes; about 8% of riders use the assistive options. Cyclistic users are more likely to ride for leisure, but about 30% use them to commute to work each day.
+
+Until now, Cyclistic’s marketing strategy relied on building general awareness and appealing to broad consumer segments. One approach that helped make these things possible was the flexibility of its pricing plans: single-ride passes, full-day passes,
+and annual memberships. Customers who purchase single-ride or full-day passes are referred to as casual riders. Customers who purchase annual memberships are Cyclistic members.
+
+In order to design marketing strategies aimed at converting casual riders into anual members, the marketing analyst team needs to better understand:  
+  1. How do annual members and casual riders use Cyclistic bikes differently?  
+  2. Why would casual riders buy Cyclistic annual memberships?  
+  3. How can Cyclistic use digital media to influence casual riders to become members?  
+  
+#### Note:
+Cyclistic is a fictional company using for the purpose of this case study.
+The data source is provided for Google Data Analyst Professional Certificate under this [license](https://www.divvybikes.com/data-license-agreement)  
+[Data source](https://divvy-tripdata.s3.amazonaws.com/index.html)
+Time frame between 01/01/2022 and 12/31/2022
+
+### Load libraries
+```{r, message=FALSE}
+library(data.table)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(shadowtext)
+library(skimr)
+```
+
+### Load and inspect data
+```{r, message=FALSE}
+# Set directory and load the data
+cyclistic_tripdata <- list.files(pattern = '*-divvy-tripdata.csv') %>%
+  map_df(~fread(.))
+# Summary of the data
+str(cyclistic_tripdata)
+```
+
+
+```{r message=FALSE}
+# Check for duplicated data
+duplicated(cyclistic_tripdata) %>%
+  summary()
+```
+There's no duplicated row. 
+### Inspect a first few row of the data
+```{r message=FALSE}
+head(cyclistic_tripdata)
+```
+
+- The data has been successfully loaded into a data frame named cyclistic_tripdata.  
+- There is no missing row or column due to the process.  
+- There are 5,858 missing rows in end_lat and end_lng columns. We will skip those records for now.  
+- The size of the data frame is 5,667,717 rows x 13 columns.  
+- There are missing data of start_station_name and start_station_id.  
+
+
+### Data transformation
+Add a new column named `ride_length` which is calculated by subtracting the column "started_at" from the column "ended_at"
+```{r}
+# Calculate and create new column ride_length
+cyclistic_tripdata <- cyclistic_tripdata %>%
+  mutate(ride_length = ended_at - started_at)
+```
+Create a new column named `day_of_week`, and calculate the day of the week that each ride started. Note: 1=Sunday and 7=Saturday.
+```{r}
+# Create new column day_of_week
+cyclistic_tripdata <- cyclistic_tripdata %>%
+  mutate(day_of_week = wday(as.Date(started_at)))
+```
+Create a new column named `month` which shows the month when the trip was made.
+```{r}
+# Create new column month
+cyclistic_tripdata <- cyclistic_tripdata %>%
+  mutate(month = format(as.Date(started_at), "%m"))
+```
+```{r}
+# Brief summary of the new ride_length column
+skim(cyclistic_tripdata$ride_length)
+```
+
+#### Checking for outliers
+```{r}
+# Make a box plot of `ride_length` 
+cyclistic_tripdata %>%
+  ggplot(aes(x = ride_length)) +
+  geom_boxplot()
+```
+
+The `ride_length` variable has extreme number of outliers. There are even negative values which make no sense when the length of a ride is supposed to be always positive.   
+
+#### Remove outliers
+```{r}
+# Convert ride_length which is in seconds to minutes
+cyclistic_tripdata <- cyclistic_tripdata %>%
+  mutate(ride_length = round(as.numeric(ride_length)/60, 1))
+```
+```{r}
+# Filter out the rides which have the negative value 
+cyclistic_tripdata <- cyclistic_tripdata %>%
+  filter(ride_length >0)
+```
+```{r}
+# Calculate IQR and upper limit and lower limit
+ride_length_q1 <- quantile(cyclistic_tripdata$ride_length, 0.25, na.rm = FALSE)
+ride_length_q3 <- quantile(cyclistic_tripdata$ride_length, 0.75, na.rm = FALSE)
+ride_length_iqr <- ride_length_q3 - ride_length_q1
+lower_limit <- ride_length_q1 - ride_length_iqr * 1.5
+upper_limit <- ride_length_q3 + ride_length_iqr * 1.5
+```
+
+```{r}
+# Filter out values that are not within lower limit and upper limit
+cyclistic_tripdata <- cyclistic_tripdata %>%
+  filter((ride_length >= lower_limit) & (ride_length <= upper_limit))
+```
+```{r}
+str(cyclistic_tripdata)
+```
+After removing outliers, we lost about 425 thousand records(~7.5%). We can still work perfectly fine with over 5.2 million records left.
+```{r}
+# Create a box plot of the ride_length after removing outliers
+cyclistic_tripdata %>%
+  ggplot(aes(x= ride_length)) +
+  geom_boxplot()
+```
+
+The data looks more sensible after the removal of the outliers. 
+* Checking unique values of rideable_type
+```{r}
+# rideable_type unique values
+cyclistic_tripdata$rideable_type %>%
+  unique()
+```
+There are 3 unique values in rideable_type column for three type of rental bikes, electric bikes, classic bikes, and docked bikes. However, Cyclistic only offers two types of bikes which are electric bikes and classic bikes. And all bikes are docked to stations. It seems like there was a mistake in categorizing the type of bikes. Assuming that docked_bike is the same as classic_bike, we will change all docked_bike to classic_bike.   
+```{r}
+# Replace docked_bike as classic_bike
+cyclistic_tripdata$rideable_type[cyclistic_tripdata$rideable_type == "docked_bike"] <- "classic_bike"
+```
+```{r}
+# Check rideable_type unique values again
+cyclistic_tripdata$rideable_type %>%
+  unique()
+```
+
+### Cyclistic in 2022
+```{r, message=FALSE}
+# Make a bar plot for the number of trips made respect to member/non-member 
+
+ggplot(cyclistic_tripdata, aes(x= member_casual)) +
+  geom_bar(fill = c("#CD84EA", "#3cb4e5")) +
+  geom_text(aes(label = scales::comma(after_stat(count))), stat = "count", hjust = 1.2, color = "white", size = 4) +
+  scale_x_discrete(labels = c("Casual Riders", "Annual Members")) + 
+  scale_y_continuous(labels = function(x) paste0(x/1e6, "M")) +
+  labs(x= "", y= "Trips") +
+  ggtitle("Number of trips made", subtitle = "Over 5.2M trips were made in 2022") + 
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        panel.background = element_rect(fill= "white"),
+        panel.grid.major.x = element_line(color = "#A8BAC4", linewidth = 0.3),
+        axis.ticks.length = unit(0, "mm")) +
+  coord_flip()
+
+```
+
+- In 2022, Cyclistic has over 1,300 operating stations all over grand Chicago area. Over 5.2 Million trips were made, in which over 3.2 Million trips (64%) were made by member and 2 Million (36%) were made by non-member.
+
+```{r}
+# Group up the data set by the month trips were made, and count the number of trips.
+cyclistic_tripdata %>%
+  group_by(month, member_casual) %>%
+  tally() %>%
+  
+# Make an area plot  
+  ggplot(aes(x= as.numeric(month), y=n, fill = member_casual)) + 
+  geom_area() +
+  scale_x_continuous(limits = c(1,12), 
+                     breaks = seq(1,12),
+                     labels = c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+                     expand = expansion(add = c(0,0))) +
+  scale_y_continuous(labels = function(x) paste0(x/1000)) + 
+  labs(x="", y="Number of trips (in thousand)", fill = "") + 
+  ggtitle("Total number of trips each month",
+          subtitle = "July is the busiest month of the year") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        panel.background = element_rect(fill= "white"),
+        panel.grid.major.y = element_line(color = "#A8BAC4", size = 0.3),
+        axis.ticks.length = unit(0,"mm")) +
+  scale_fill_manual(values = c("#3cb4e5", "#CD84EA"), 
+                    labels = c("casual"= "Casual Riders", "member"= "Annual Members"),
+                    limits = c("member", "casual"))
+```
+
+- Least trips in a month: 103,770 (Jan)  
+- Most trips in a month: 823,488 (Jul)  
+- There was a huge increase of number of ride in summer time from April to October. Peak in July.  
+- During the winter time, there were not many rides made by casual riders. However, on summertime, casual riders made significantly more trips than on the wintertime.   
+```{r, message=FALSE,collapse=TRUE}
+# Make a side-by-side bar plot for the number of rides made by member and non-member respect to each day of the week.
+ggplot(cyclistic_tripdata, aes(x= factor(day_of_week), fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  scale_x_discrete(limits = c("2","3","4","5","6","7","1"), labels = c(
+    "1"= "Sunday", 
+    "2"= "Monday", 
+    "3"= "Tuesday",
+    "4"= "Wednesday",
+    "5"= "Thursday",
+    "6"= "Friday",
+    "7"= "Saturday")) +
+  scale_fill_discrete(labels = c("Casual Riders", "Annual Member")) +
+  scale_y_continuous(labels = function(x) paste0(x/1000, "K")) +
+  scale_fill_manual(values = c("#CD84EA", "#3cb4e5"), labels = c("member" = "Annual Members", "casual" = "Casual Rdiers")) +
+  labs(x = "", y= "Number of trips", fill="") +
+  ggtitle("Number of ride made by members during days of the week") + 
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        panel.background = element_rect(fill= "white"),
+        panel.grid.major.y = element_line(color = "#A8BAC4", size = 0.3),
+        axis.ticks.length = unit(0,"mm"))
+```
+
+- Members made way more trips during weekdays but non-members used Cyclistic bike more in the weekend.
+
+```{r message=FALSE}
+# Sum up the total of the ride length was made by member and non-member for each day of the week
+cyclistic_tripdata %>%
+  group_by(day_of_week, member_casual) %>%
+  summarise(total_ride_length = as.numeric(sum(ride_length))/60) %>%
+  
+# Make a stacked bar plot
+  ggplot(aes(x=factor(day_of_week), y=total_ride_length, fill= member_casual))+
+  geom_col() +
+  scale_x_discrete(limits = c("2","3","4","5","6","7","1"), labels = c(
+    "1"= "Sunday", 
+    "2"= "Monday", 
+    "3"= "Tuesday",
+    "4"= "Wednesday",
+    "5"= "Thursday",
+    "6"= "Friday",
+    "7"= "Saturday")) +
+  scale_y_continuous(labels = function(x) paste0(round(x/1000/60), "K")) +
+  scale_fill_manual(values = c("#CD84EA", "#3cb4e5"), labels = c("member" = "Annual Member", "casual" = "Causal Riders")) +
+  labs(x = "Day of the week", y= "Hours of ride", fill="") +
+  ggtitle("Total time ride during days of the week",
+          subtitle = "Our bikes are used more in the weekend") + 
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        panel.background = element_rect(fill= "white"),
+        panel.grid.major.y = element_line(color = "#A8BAC4", size = 0.3),
+        axis.ticks.length = unit(0,"mm"))
+```
+
+- Total hours used by members stays about the for every day of the week.  
+- Non-members used Cyclistic service for many more hours in the weekend than members did  
+```{r, message=FALSE}
+# Create a boxplot to visualize the average `ride_length` for each month
+cyclistic_tripdata %>%
+  ggplot(aes(x= factor(month), y = ride_length)) +
+  geom_boxplot(aes(fill= member_casual), position = 'dodge', outlier.shape = NA)+
+  scale_x_discrete(labels = c(
+                       "01" = "Jan",
+                       "02" = "Feb",
+                       "03" = "Mar",
+                       "04" = "Apr",
+                       "05" = "May",
+                       "06" = "Jun",
+                       "07" = "Jul",
+                       "08" = "Aug", 
+                       "09" = "Sep",
+                       "10" = "Oct",
+                       "11" = "Nov",
+                       "12" = "Dec"
+                     )) +
+  scale_y_continuous(limits = c(0,46)) +
+  scale_fill_manual(values = c("#CD84EA", "#3cb4e5"),
+                    labels = c("member" = "Annual Member", "casual" = "Casual Riders")
+                      ) +
+  labs(x='', y="Ride length in minute", fill="") +
+  ggtitle("Average ride length through 2022",
+          subtitle = "Non-members tend to use our bikes longer than members") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        panel.background = element_rect(fill= "white"),
+        panel.grid.major.y = element_line(color = "#A8BAC4", size = 0.3))
+```
+
+- For members, they tend to use the bikes for the same amount of time throughout the year . 
+- Non-members tend to make longer rides than our members on average. Members used our bikes on average of under 10 minutes while non-members used our services for average of up to 13 minutes. 
+
+
+```{r}
+ggplot(cyclistic_tripdata, aes(x= rideable_type)) + 
+  geom_bar(aes(fill = member_casual)) +
+  scale_x_discrete(limits = c("electric_bike", "classic_bike"),
+                   labels = c(
+                     "electric_bike" = "Electric Bike",
+                     "classic_bike" = "Classic Bike"
+                   )) +
+  scale_y_continuous(labels = function(x) paste0(x/1e6,"M")) +
+  scale_fill_manual(values = c("#CD84EA", "#3cb4e5"),
+                    labels = c("casual" = "Casual Riders", "member" = "Annual Member")) +
+  labs(x="Types of Bike", y="Number of Trips", fill = "") +
+  ggtitle("Number of trips by bike type", 
+          subtitle = "Almost 3 millions of trips were made using electric bikes") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        panel.background = element_rect(fill= "white"),
+        panel.grid.major.y = element_line(color = "#A8BAC4", size = 0.3),
+        axis.ticks.length = unit(0,"mm"))
+```
+
+- The most popular type of bike was electric bike. Amost 3 million trips were made using electric bikes.
+- Non-members tend to use electric bikes more than classic bikes. While members used electric bikes and classic bikes to make the same number amount of trips.
+
+
+```{r}
+# Create a new data frame with 10 stations with the most number of rides were made.
+top_10_busiest_station <- cyclistic_tripdata %>%
+  group_by(start_station_id, start_station_name) %>%
+  tally() %>%
+  arrange(desc(n)) %>%
+  filter(start_station_id != "") %>%
+  head(10)
+
+# Create a bar chart for the count for the 10 busiest stations
+ggplot(top_10_busiest_station, aes(x= reorder(start_station_name, n), y= n)) +
+  geom_col(fill = "#3cb4e5") +
+  coord_flip() +
+  labs(y = "Number of trips", x='') +
+  ggtitle("Top 10 busiest station", 
+          subtitle = "Over 75 thounsand trips started from Streeter Dr & Grand Ave") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        panel.background = element_rect(fill= "white"),
+        panel.grid.major.x = element_line(color = "#A8BAC4", size = 0.3),
+        axis.ticks.length = unit(0,"mm"))
+```
+
+- The busiest station was on Streeter Dr & Grand Ave. Over 75 thousands trips were started from here.
+
+### Summary  
+_ In 2022, there were over 5.2 million trips made on the Cyclistic's platform. 64 percent of these trips were made by membership users.   
+_ The demand for rental bikes are much higher during the summer time (from May to October). It peaks in July with over 800 thousand trips. The lowest month is January.   
+_ Both annual members and casual riders use Cyclistic bikes mostly in the summer time. It's reasonable when it's very cold and windy in Chicago during the winter time.   
+_ Annual members make much more rides than casual riders during the year, 62% made by members vs 38% by non-members.   
+_ Annual members use Cyclistic bikes more on weekdays vs weekends. While casual users make more trips on weekends than weekdays. It seems that members use our rental bikes to commute while casual users use them leisurely.   
+_ Although members make much more trips than casual users, the average ride length of annual members is much shorter than casual riders.   
+_ Electric bikes are more popular among casual riders while annual members use electric bikes and classic bikes indistinguishably.   
+
+### Recomendations  
+_ Since casual riders tend to make longer trips than annual members, Cyclistic's marketing department can run advertisements to highlight the cost benefit of the annual membership. At the current price of annual membership, casual riders only need to make 1 trip per week to break even on classic bike when most casual rides are between 10-12 minutes.  
+_ Since casual riders use electric bikes more than classic bike, the annual membership will save them a big amount when they use electric bike. \$1 unlock + \$0.42/minute for casual ride vs free unlock + \$0.17/minute for membership.   
+_ Bikes are also a environment friendly method of transportation, advertisements to encourage more people to ride bikes to save our environment will bring in more users and becoming a membership is solid message showing that we care deeply to our environment.   
